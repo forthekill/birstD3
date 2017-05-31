@@ -1,0 +1,944 @@
+<html>
+  <head>
+    <style>
+      body {
+          font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+          height: 100%;
+          width: 100%;
+          overflow: hidden;
+      }
+
+      #chartDiv {
+          width: 100%;
+          height: 100%;
+      }
+
+      .container {
+          position: absolute;
+          top: 50%;
+          left: 50%;
+          -moz-transform: translateX(-50%) translateY(-50%);
+          -webkit-transform: translateX(-50%) translateY(-50%);
+          transform: translateX(-50%) translateY(-50%);
+      }
+
+      #explanation {
+        position: absolute;
+        top: 45%;
+        left: 41%;
+        width: 18%;
+        text-align: center;
+        color: #666;
+        z-index: -1;
+      }
+
+      #percentage {
+        font-size: 4vw;
+      }
+
+      #sidebar {
+        float: left;
+        width: 13.3%;
+      }
+
+      #sequence {
+        width: 100%;
+        float: left;
+        height: 11%;
+      }
+
+      #chart {
+        position: relative;
+        float: left;
+        width: 86.7%;
+        height: 89%;
+      }
+
+      #legend {
+        padding: 10% 0 0 3%;
+      }
+
+      #sequence text {
+        font-weight: 400;
+        fill: #fff;
+        font-size: 2vmin;
+      }
+
+      #legend text {
+        font-weight: 400;
+        fill: #fff;
+        font-size: 2vmin;
+      }
+    </style>
+
+    <script type="text/javascript" src="https://d3js.org/d3.v4.min.js"></script>
+    <script type="text/javascript" src="https://code.jquery.com/jquery-3.2.1.min.js"></script>
+    <script type="text/javascript" src="https://sde.birst.com/js/birst_embed.js"></script>
+  </head>
+
+  <body>
+    <div class="container">
+      <div id="chartDiv">
+        <div id="sequence"></div>
+        <div id="chart">
+          <div id="explanation" style="visibility: hidden;">
+            Percentage</br>
+            <span id="percentage"></span><br/>
+          </div>
+        </div>
+        <div id="sidebar">
+          <div id="legend" style=""></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- D3 CODE -->
+    <script>
+      // TODO: original hardcoded sizing, saved for use in calculating % for each element for dynamic sizing
+      //var width = 750;
+      //var height = 600;
+
+      var vis;
+
+      // Breadcrumb dimensions: width, height, spacing, width of tip/tail.
+      // Size is set dynamically when drawn
+      var breadDim = {
+        w: 75, h: 30, s: 3, t: 10
+      };
+
+      //var palette = d3.schemeCategory20c();
+
+      // Mapping of step names to colors.
+      var colors = {
+        "Direct": "#5687d1",
+        "Partner": "#7b615c",
+        "VAR": "#de783b",
+        "Overlay": "#6ab975",
+        "East": "#a173d1",
+        "West": "#bbbbbb"
+      };
+
+      var randomColor = (function(){
+        var golden_ratio_conjugate = 0.618033988749895;
+        var h = Math.random();
+
+        var hslToRgb = function (h, s, l){
+            var r, g, b;
+
+            if(s == 0){
+                r = g = b = l; // achromatic
+            }else{
+                function hue2rgb(p, q, t){
+                    if(t < 0) t += 1;
+                    if(t > 1) t -= 1;
+                    if(t < 1/6) return p + (q - p) * 6 * t;
+                    if(t < 1/2) return q;
+                    if(t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+                    return p;
+                }
+
+                var q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+                var p = 2 * l - q;
+                r = hue2rgb(p, q, h + 1/3);
+                g = hue2rgb(p, q, h);
+                b = hue2rgb(p, q, h - 1/3);
+            }
+
+            return '#'+Math.round(r * 255).toString(16)+Math.round(g * 255).toString(16)+Math.round(b * 255).toString(16);
+        };
+
+        return function(){
+          h += golden_ratio_conjugate;
+          h %= 1;
+          return hslToRgb(h, 0.5, 0.60);
+        };
+      })();
+
+      function updateColorPalette(colorObject, wordArray){
+
+        console.log("updating colors");
+        console.log("wordArray length: " + wordArray.length);
+
+        for (var i = 0; i < wordArray.length; i++){
+          var w = wordArray[i];
+          console.log("w: " + w);
+
+          if (!(w in colorObject)){
+            // Add value with color
+            colorObject[w] = randomColor();
+            console.log("added color " + w + ": " + colorObject[w]);
+          }
+        }
+
+        return colorObject;
+
+      }
+
+      // Main function to draw and set up the visualization, once we have the data.
+      function createVisualization(json,height,width) {
+
+        var sbWidth = width * 0.866;
+        var sbHeight = height * 0.89;
+        var radius = Math.min(sbWidth, sbHeight) / 2;
+
+        console.log("radius: " + radius);
+        console.log("sbWidth: " + sbWidth);
+        console.log("sbHeight: " + sbHeight);
+
+        breadDim.w = width * 0.1;
+        breadDim.h = height * 0.044;
+        breadDim.s = breadDim.h * 0.1;
+        breadDim.t = breadDim.h * 0.333;
+
+        // Clear all objects from div
+        d3.select("#chart").selectAll("svg").remove();
+        d3.selectAll("#legend").selectAll("svg").remove();
+        d3.selectAll("#sequence").selectAll("svg").remove();
+
+        vis = d3.select("#chart").append("svg:svg")
+            .attr("width", sbWidth)
+            .attr("height", sbHeight)
+            .append("svg:g")
+            .attr("id", "container")
+            .attr("transform", "translate(" + sbWidth / 2 + "," + sbHeight / 2 + ")");
+
+        var partition = d3.partition()
+            .size([2 * Math.PI, radius * radius]);
+
+        var arc = d3.arc()
+            .startAngle(function(d) { return d.x0; })
+            .endAngle(function(d) { return d.x1; })
+            .innerRadius(function(d) { return Math.sqrt(d.y0); })
+            .outerRadius(function(d) { return Math.sqrt(d.y1); });
+
+        // Basic setup of page elements.
+        initializeBreadcrumbTrail(height,width);
+        //drawLegend(width);
+
+        // Bounding circle underneath the sunburst, to make it easier to detect
+        // when the mouse leaves the parent g.
+        vis.append("svg:circle")
+            .attr("r", radius)
+            .style("opacity", 0);
+
+        // Turn the data into a d3 hierarchy and calculate the sums.
+        var root = d3.hierarchy(json)
+            .sum(function(d) { return d.size; })
+            .sort(function(a, b) { return breadDim.value - a.value; });
+
+        // For efficiency, filter nodes to keep only those large enough to see.
+        var nodes = partition(root).descendants()
+            .filter(function(d) {
+                return (d.x1 - d.x0 > 0.005); // 0.005 radians = 0.29 degrees
+            });
+
+        var path = vis.data([json]).selectAll("path")
+            .data(nodes)
+            .enter().append("svg:path")
+            .attr("display", function(d) { return d.depth ? null : "none"; })
+            .attr("d", arc)
+            .attr("fill-rule", "evenodd")
+            .style("fill", function(d) { return colors[d.data.name]; })
+            .style("opacity", 1)
+            .on("mouseover", mouseover);
+
+        // Add the mouseleave handler to the bounding circle.
+        d3.select("#container").on("mouseleave", mouseleave);
+
+        // Get total size of the tree = value of root node from partition.
+        totalSize = path.datum().value;
+       };
+
+      // Fade all but the current sequence, and show it in the breadcrumb trail.
+      function mouseover(d) {
+
+        var percentage = (100 * d.value / totalSize).toPrecision(3);
+        percentage = +parseFloat(percentage).toFixed(2);
+        var percentageString = percentage + "%";
+
+        if (percentage < 0.05) {
+          percentageString = "< 0.05%";
+        }
+
+        d3.select("#percentage")
+            .text(percentageString);
+
+        d3.select("#explanation")
+            .style("visibility", "");
+
+        var sequenceArray = d.ancestors().reverse();
+        sequenceArray.shift(); // remove root node from the array
+        updateBreadcrumbs(sequenceArray, percentageString);
+
+        // Fade all the segments.
+        d3.selectAll("path")
+            .style("opacity", 0.3);
+
+        // Then highlight only those that are an ancestor of the current segment.
+        vis.selectAll("path")
+            .filter(function(node) {
+                      return (sequenceArray.indexOf(node) >= 0);
+                    })
+            .style("opacity", 1);
+      }
+
+      // Restore everything to full opacity when moving off the visualization.
+      function mouseleave(d) {
+
+        // Hide the breadcrumb trail
+        d3.select("#trail")
+            .style("visibility", "hidden");
+
+        // Deactivate all segments during transition.
+        d3.selectAll("path").on("mouseover", null);
+
+        // Transition each segment to full opacity and then reactivate it.
+        d3.selectAll("path")
+            .transition()
+            .duration(1000)
+            .style("opacity", 1)
+            .on("end", function() {
+                    d3.select(this).on("mouseover", mouseover);
+                  });
+
+        d3.select("#explanation")
+            .style("visibility", "hidden");
+      }
+
+      function initializeBreadcrumbTrail(height,width) {
+        // Add the svg area.
+        var trail = d3.select("#sequence").append("svg:svg")
+            .attr("width", width)
+            .attr("height", height * 0.074)
+            .attr("id", "trail");
+        // Add the label at the end, for the percentage.
+        trail.append("svg:text")
+          .attr("id", "endlabel")
+          .style("fill", "#000");
+      }
+
+      // Generate a string that describes the points of a breadcrumb polygon.
+      function breadcrumbPoints(d, i) {
+        var points = [];
+        points.push("0,0");
+        points.push(breadDim.w + ",0");
+        points.push(breadDim.w + breadDim.t + "," + (breadDim.h / 2));
+        points.push(breadDim.w + "," + breadDim.h);
+        points.push("0," + breadDim.h);
+        if (i > 0) { // Leftmost breadcrumb; don't include 6th vertex.
+          points.push(breadDim.t + "," + (breadDim.h / 2));
+        }
+        return points.join(" ");
+      }
+
+      // Update the breadcrumb trail to show the current sequence and percentage.
+      function updateBreadcrumbs(nodeArray, percentageString) {
+
+        // Data join; key function combines name and depth (= position in sequence).
+        var trail = d3.select("#trail")
+            .selectAll("g")
+            .data(nodeArray, function(d) { return d.data.name + d.depth; });
+
+        // Remove exiting nodes.
+        trail.exit().remove();
+
+        // Add breadcrumb and label for entering nodes.
+        var entering = trail.enter().append("svg:g");
+
+        entering.append("svg:polygon")
+            .attr("points", breadcrumbPoints)
+            .style("fill", function(d) { return colors[d.data.name]; });
+
+        entering.append("svg:text")
+            .attr("x", (breadDim.w + breadDim.t) / 2)
+            .attr("y", breadDim.h / 2)
+            .attr("dy", breadDim.h * 0.15)
+            .attr("text-anchor", "middle")
+            .text(function(d) { return d.data.name; });
+
+        // Merge enter and update selections; set position for all nodes.
+        entering.merge(trail).attr("transform", function(d, i) {
+          return "translate(" + i * (breadDim.w + breadDim.s) + ", 0)";
+        });
+
+        // Now move and update the percentage at the end.
+        d3.select("#trail").select("#endlabel")
+            .attr("x", (nodeArray.length + 0.5) * (breadDim.w + breadDim.s))
+            .attr("y", breadDim.h / 2)
+            .attr("dy", breadDim.h * 0.15)
+            .attr("text-anchor", "middle")
+            .text(percentageString);
+
+        // Make the breadcrumb trail visible, if it's hidden.
+        d3.select("#trail")
+            .style("visibility", "");
+
+      }
+
+      function drawLegend(width) {
+
+        // Dimensions of legend item: width, height, spacing, radius of rounded rect.
+        // TODO: set the other dimesions dynamically
+        var li = {
+          w: width * 0.1, h: 30, s: 3, r: 3
+        };
+
+        var legend = d3.select("#legend").append("svg:svg")
+            .attr("width", li.w)
+            .attr("height", d3.keys(colors).length * (li.h + li.s));
+
+        var g = legend.selectAll("g")
+            .data(d3.entries(colors))
+            .enter().append("svg:g")
+            .attr("transform", function(d, i) {
+                    return "translate(0," + i * (li.h + li.s) + ")";
+                 });
+
+        g.append("svg:rect")
+            .attr("rx", li.r)
+            .attr("ry", li.r)
+            .attr("width", li.w)
+            .attr("height", li.h)
+            .style("fill", function(d) { return d.value; });
+
+        g.append("svg:text")
+            .attr("x", li.w / 2)
+            .attr("y", li.h / 2)
+            .attr("dy", "0.35em")
+            .attr("text-anchor", "middle")
+            .text(function(d) { return d.key; });
+      }
+
+      // Take a 2-column CSV and transform it into a hierarchical structure suitable
+      // for a partition layout. The first column is a sequence of step names, from
+      // root to leaf, separated by hyphens. The second column is a count of how
+      // often that sequence occurred.
+      function buildHierarchy(csv) {
+        var root = {"name": "root", "children": []};
+        for (var i = 0; i < csv.length; i++) {
+          var sequence = csv[i][0];
+          var size = +csv[i][1];
+          if (isNaN(size)) { // e.g. if this is a header row
+            continue;
+          }
+          var parts = sequence.split("-");
+          var currentNode = root;
+          for (var j = 0; j < parts.length; j++) {
+            var children = currentNode["children"];
+            var nodeName = parts[j];
+            var childNode;
+            if (j + 1 < parts.length) {
+         // Not yet at the end of the sequence; move down the tree.
+        var foundChild = false;
+        for (var k = 0; k < children.length; k++) {
+          if (children[k]["name"] == nodeName) {
+            childNode = children[k];
+            foundChild = true;
+            break;
+          }
+        }
+        // If we don't already have a child node for this branch, create it.
+        if (!foundChild) {
+          childNode = {"name": nodeName, "children": []};
+          children.push(childNode);
+        }
+        currentNode = childNode;
+            } else {
+        // Reached the end of the sequence; create a leaf node.
+        childNode = {"name": nodeName, "size": size};
+        children.push(childNode);
+            }
+          }
+        }
+        return root;
+      };
+
+    </script>
+
+    <!-- BIRST FUNCTIONS -->
+    <script>
+        /* BIRST FUNCTIONS - NO MODIFICATION NEEDED */
+
+        /* FUNCTIONS */
+
+        // FUNCTION: escapeParam
+        // Replace single quotes in a string
+        function escapeParam(str) {
+            str = str.replace(/'/g, "\\'");
+            return str;
+        }
+
+        // FUNCTION: indexOf
+        // Lookup a particular object key in an array of objects
+        var indexOf = function(key, array) {
+            for (var i = 0; i < array.length; i++) {
+                if (key === array[i].key) {
+                    return i; // returns index of matching object
+                }
+            }
+            return -1; // no match found
+        };
+
+        // FUNCTION: prepareFilters
+        // Validates and prepares the filter state
+        var prepareFilters = function(state, apply) {
+
+          var test;
+          var value;
+
+          if (apply === null) {
+              console.debug("apply is null. All filters valid.");
+              return state;
+          }
+
+          // apply is empty
+          if (apply.length === 0) {
+              console.debug("apply is empty. All filters valid.");
+              return state;
+          }
+
+          var idx = indexOf("filters", apply)
+          if (idx >= 0) {
+              value = apply[idx].value;
+              console.debug("value:" + value);
+          }
+
+          switch (value) {
+            case "ALL":
+                console.log("apply is ALL. All filters valid.");
+                return state;
+                break;
+
+            case "NONE":
+                console.debug("apply is NONE. No filters valid.");
+                state.length = 0;
+                return state;
+                break;
+
+            case "VALID":
+                for (var f = 0; f < state.length; f++) {
+
+                    console.debug("STATE[" + f + "]");
+                    console.debug(state[f]);
+                    console.debug(state[f].key);
+
+                    test = indexOf(state[f].key, apply);
+                    console.debug("test: " + test);
+
+                    if (test < 0) {
+                        // remove filter from state
+                        state.splice(f, 1);
+                        console.debug("Filter not listed as VALID. Removed.");
+                    }
+                }
+                return state;
+                break;
+
+            case "INVALID":
+              for (var f = 0; f < state.length; f++) {
+
+                console.debug(state[f]);
+                console.debug(state[f].key);
+
+                test = indexOf(state[f].key, apply);
+
+                if (test >= 0) {
+                  // remove filter from state
+                  state.splice(f, 1);
+                  console.debug("Filter listed as INVALID. Removed.");
+                }
+              }
+              return state;
+              break;
+
+            default:
+              // apply is misconfigured, then ALL assumed
+              console.debug("apply was misconfigured, leaving filter state as is");
+              return state;
+          }
+
+        };
+
+        // FUNCTION: addDefaultFilters
+        // Adds default filters to the filter state
+        var addDefaultFilters = function(state, defaults) {
+
+            for (var d = 0; d < defaults.length; d++) {
+
+                var filt = defaults[d];
+
+                // If filter does NOT exist in the current filter state
+                if (indexOf(filt.key, state) < 0) {
+                    // Add filter to state
+                    console.debug("F" + d + ": Default filter not present. Add to filter state.");
+                    state.push(filt);
+                } else {
+                    console.debug("F" + d + ": Default filter already exists. Ignore default filter.");
+                }
+            }
+            return state;
+        };
+
+        // FUNCTION: createWhere
+        // Creates WHERE clause based on filter state
+        var createWhere = function(state) {
+
+            var clause = "";
+
+            // Check to see if there are current filters
+            if (state.length != 0) {
+                clause += " WHERE ("; // Start WHERE
+
+                // Get the filters from the filter state array and append them to the base query
+                for (var i = 0; i < state.length; i++) {
+
+                    var filter = state[i];
+
+                    // Split multiple filter values into an array of filter values
+                    var values = String(filter.value).split(",");
+
+                    // IF NOT the first or only param, add an AND
+                    if (i != 0) {
+                        clause += " AND ";
+                    }
+
+                    // Start Filter
+                    clause += "(";
+
+                    // Loop through filter value array and append filter params to the query
+                    for (var q = 0; q < values.length; q++) {
+
+                        // For each filter value, set the key and the value
+                        if (q === values.length - 1) {
+                            // Single or final filter value
+                            clause += "[" + filter.key + "]" + filter.operator + "'" + escapeParam(values[q]) + "'";
+                        } else {
+                            // OR for multiple filter values
+                            clause += "[" + filter.key + "]" + filter.operator + "'" + escapeParam(values[q]) + "' OR ";
+                        }
+
+                    }
+
+                    // Close Filter
+                    clause += ")";
+                }
+
+                // Close WHERE
+                clause += ")";
+
+                console.log("Clause: " + clause);
+
+            } else {
+                console.debug("Filter state empty. No clause created.")
+            }
+
+            // Return the finalized WHERE clause
+            return clause;
+        };
+
+        // FUNCTION: runQuery
+        // Sets filters, creates and runs the query
+        var runQuery = function() {
+            console.log("in runQuery");
+
+            // Test for applyFilters definition, if missing, define
+            if (!("applyFilters" in window) || (typeof applyFilters == "undefined")) {
+                var applyFilters = [];
+            }
+
+            // Test for defaultFilters definition, if missing, define
+            if (!("defaultFilters" in window) || (typeof defaultFilters == "undefined")) {
+                var defaultFilters = [];
+            }
+
+            // Prepare filter state for WHERE clause construction
+            var state = prepareFilters(filterState, applyFilters);
+            state = addDefaultFilters(state, defaultFilters);
+
+            // Create WHERE clause
+            var clause = createWhere(state);
+
+            // Append final query params
+            var query = bql + clause + bqlSuffix;
+
+            // Verify the final query
+            console.log("Query:");
+            console.log(query);
+
+            // Execute the query
+            BirstConfig.getData(query);
+
+        };
+    </script>
+
+    <!-- QUERY DEFINITION SCRIPT -->
+    <script>
+        /* QUERY DEFINITION - MODIFICATION NEEDED */
+
+        // MODIFICATION NEEDED
+        // Set the value of the measure to the appropriate Birst measure name
+        // TODO: Make this a measure array?, this will allow looping through to create query
+        var measure = "[Close Date: Sum: Amount]";
+
+        // MODIFICATION NEEDED
+        // Set the value of Title to the appropriate Birst dimension name
+        // TODO: Make this a dimension array?, this will allow looping through to create query
+        var dim1 = "[Manager.Channel Name]";
+        var dim2 = "[Location.Territory Name]";
+        var dim3 = "[Manager.Manager Name]";
+        //var dim4 = "[Location.State Code]";
+        //var dim5 = "[Owner.Owner Name]";
+
+
+        // MODIFICATION NEEDED
+        // Set the sort dimension
+        var sortDimension = "";
+        //var sortDimension = "";
+        var sortOrder = "ASC";
+
+        // TODO: Make this a loop? use measure and dimension arrays to create query dynamically
+        // Default query
+        var bql = "SELECT USING OUTER JOIN " + measure + " 'COL0' , " + dim1 + " 'COL1' , " + dim2 + " 'COL2' , " + dim3 + " 'COL3' " + ((sortDimension != "") ? ", " + sortDimension + " 'COL6' " : "") + "FROM [ALL]";
+        //var bql = "SELECT USING OUTER JOIN " + measure + " 'COL0' , " + dim1 + " 'COL1' , " + dim2 + " 'COL2' , " + dim3 + " 'COL3' , " + dim4 + " 'COL4' , " + dim5 + " 'COL5' " + ((sortDimension != "") ? ", " + sortDimension + " 'COL6' " : "") + "FROM [ALL]";
+
+        // MODIFICATION NEEDED
+        // Query suffix
+        // Set appropriate suffix
+        if (sortDimension != "") {
+            var bqlSuffix = " ORDER BY " + sortDimension + " " + sortOrder; // Don't forget the leading space
+        } else {
+            var bqlSuffix = ""; // For no suffix
+        }
+
+
+        /* FILTER DEFINITION */
+
+        var filterState = []; // Create a filter state array
+
+        // MODIFICATION NEEDED
+        // Set the valid filters that can be applied
+        var applyFilters = []; // All filters are valid
+        //var applyFilters = [{"key":"filters","value":"ALL"}]; // All filters are valid
+        //var applyFilters = [{"key":"filters","value":"VALID"},{"key":"Manager.Channel Name"}]; // Listed filters are valid
+        //var applyFilters = [{"key":"filters","value":"INVALID"},{"key":"Manager.Channel Name"}]; // Listed filters are NOT valid
+        //var applyFilters = [{"key":"filters","value":"NONE"}]; // No filters are valid
+
+        // MODIFICATION NEEDED
+        // Default filters (for initial WHERE clause)
+        var defaultFilters = [];
+        //var defaultFilters = [{"key":"Manager.Channel","operator":"=","value":["Direct"]}];
+        //var defaultFilters = [{"key":"Manager.Channel","operator":"<>","value":["Direct","Partner"]}];
+        //var defaultFilters = [{"key":"Manager.Channel","operator":"=","value":["Direct"]},{"key":"Manager.Territory","operator":"=","value":["East"]}];
+    </script>
+
+    <!-- CHART SCRIPT -->
+    <script>
+        /* CHART SPECIFIC SCRIPT - MODIFICATION NEEDED TO MATCH CHART TYPE */
+
+        // VARIABLE DEFINITIONS
+
+        // Total size of all segments; we set this later, after loading the data.
+        var totalSize = 0;
+
+        var legendArray = [];
+
+        // FUNCTION DEFINITIONS
+        // IMPORTANT!! translateData AND drawD3 FUNCTIONS WILL BE DIFFERENT FOR EACH CHART
+
+        // FUNCTION: translateData
+        // Data conversion function, BQL to Google Donut chart format
+        var translateData = function(bqlResult) {
+
+          // Example chart data format goes here
+          // [["North America-Massachusetts-Boston-Commonwealth Ave",1250],["North America-Massachusetts-Quincy-Main St",925]]
+
+          // Define array for chart data
+          var translatedData = [];
+
+          // Loop through BQL results to translate each row
+          for (var i = 0, len = bqlResult.length; i < len; i++) {
+
+            // MODIFICATION NEEDED
+            // BQL Results must be pulled from the array and populated to the proper variables
+            // Depending on data format needed for chart, it may be JSON or just an array
+            var row = bqlResult[i]; // this is an array
+
+            // TODO: turn an array of many dimensions and one value into an array with one hyphen-seperated dimension and one value
+            // ex. ["North America","Massachusetts","Boston","Commonwealth Ave",1250]
+            // into ["North America-Massachusetts-Boston-Commonwealth Ave",1250]
+
+            var element = [],
+                words = "",
+                num = row.length;
+
+            // Debugging
+            //console.log("num: " + num);
+            //console.log("row[0]");
+            //console.log(row[0]);
+
+            // Loop through words in array to create a string of hyphen-seperated words
+            for (var j = 1; j < num; j++){
+
+              var word = row[j];
+
+              if (jQuery.inArray(word, legendArray) == -1){
+                legendArray.push(word);
+              }
+              words += word;
+              // Add hyphen to all but last word in array
+              if (j !== num - 1){
+                words += "-";
+              }
+            }
+
+            // Debugging
+            //console.log("words:");
+            //console.log(words);
+            //console.log("value:");
+            //console.log(row[0]);
+
+            element.push(words); // Add hyphen-seperated words
+            element.push(row[0]); // Add numerical value
+
+            // Debugging
+            //console.log("element");
+            //console.log(element);
+            //console.log("translatedData");
+            //console.log(translatedData);
+
+            // Add element to data array
+            translatedData.push(element);
+
+          }
+
+          // Build the hierarchy from the array of arrays
+          translatedData = buildHierarchy(translatedData);
+
+          colors = updateColorPalette(colors,legendArray);
+
+          // Debugging
+          console.log("translatedData");
+          console.log(translatedData);
+          console.log("colors");
+          console.log(colors);
+
+          // Return properly formatted data
+          return translatedData;
+
+        };
+
+        // FUNCTION: drawD3
+        // Draws the D3 chart
+        var drawD3 = function(height, width) {
+
+          // Debugging
+          console.info("drawD3");
+          console.info("height: " + height);
+          console.info("width: " + width);
+
+          createVisualization(chartData,height,width);
+
+        };
+
+        // FUNCTION: drawChart
+        // Call to draw the chart
+        var drawChart = function() {
+
+          // Get current dimensions of the window
+          winWidth = $(window).width();
+          winHeight = $(window).height();
+
+          // Debugging
+          console.info("winWidth: " + $(window).width());
+          console.info("winHeight: " + $(window).height());
+
+          clearTimeout(wait);
+
+          wait = setTimeout(drawD3(winHeight,winWidth), 1000);
+
+        };
+    </script>
+
+    <!-- EXECUTE SCRIPT -->
+    <script>
+      /* MAIN EXECUTE SCRIPT - NO MODIFICATION NEEDED */
+
+      /* VARIABLES */
+
+      // Get default window dimensions
+      var winWidth = $("body").width();
+      var winHeight = $("body").height();
+
+      // Wait time for redraw
+      var wait;
+
+      // For passing data in expected chart format
+      var chartData;
+
+      // FUNCTION: birstEventHandler
+      // Birst Event Handler
+      var birstEventHandler = function(e) {
+
+        // Birst Filter operation
+        if (e.data.operation === "setFilters") {
+            console.log("setFilters");
+
+            filterState = e.data.filters;
+
+            runQuery();
+        }
+
+        // Birst Query operation
+        if (e.data.operation === "executeQueryResult") {
+
+            console.log("executeQuery");
+
+            // Get results of BQL query
+            var bqlData = e.data.result.rows;
+
+            // Call the result function to translate BQL query to chart format
+            chartData = translateData(bqlData);
+
+            // Draw chart
+            drawChart();
+
+        }
+      };
+
+      // FUNCTION: mainCallBack
+      // Main callback function
+      var mainCallBack = function() {
+        console.log("mainCallBack");
+
+        // Birst event handler declaration
+        BirstConfig.callBack(birstEventHandler);
+
+        // Run the Birst query
+        runQuery();
+      };
+
+      // DOCUMENT READY
+      $(document).ready(function() {
+        console.log("Document loaded.");
+
+        mainCallBack();
+
+      });
+
+      // FUNCTION ON RESIZE
+      // Checks for window resize and calls the draw code
+      $(window).resize(function() {
+
+        // Clear all objects from div
+        d3.select("#chart").selectAll("svg").remove();
+        d3.selectAll("#legend").selectAll("svg").remove();
+        d3.selectAll("#sequence").selectAll("svg").remove();
+
+        drawChart();
+
+      });
+    </script>
+
+  </body>
+
+</html>

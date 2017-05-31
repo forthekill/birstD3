@@ -1,0 +1,695 @@
+<html>
+  <head>
+    <style>
+      body {
+        font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+        height: 100%;
+        width: 100%;
+        overflow: hidden;
+      }
+
+      #chartDiv {
+        width: 100%;
+        height: 100%;
+      }
+
+      .container {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        -moz-transform: translateX(-50%) translateY(-50%);
+        -webkit-transform: translateX(-50%) translateY(-50%);
+        transform: translateX(-50%) translateY(-50%);
+      }
+
+    </style>
+
+    <script type="text/javascript" src="https://d3js.org/d3.v3.min.js"></script>
+    <script type="text/javascript" src="https://code.jquery.com/jquery-3.2.1.min.js"></script>
+    <script type="text/javascript" src="https://sde.birst.com/js/birst_embed.js"></script>
+  </head>
+  <body>
+    <div class="container">
+      <div id="chartDiv"></div>
+    </div>
+
+    <!-- D3 CODE -->
+    <script>
+      function liquidFillGaugeDefaultSettings(){
+          return {
+              minValue: 0, // The gauge minimum value.
+              maxValue: 100, // The gauge maximum value.
+              circleThickness: 0.05, // The outer circle thickness as a percentage of it's radius.
+              circleFillGap: 0.05, // The size of the gap between the outer circle and wave circle as a percentage of the outer circles radius.
+              circleColor: "#178BCA", // The color of the outer circle.
+              waveHeight: 0.05, // The wave height as a percentage of the radius of the wave circle.
+              waveCount: 1, // The number of full waves per width of the wave circle.
+              waveRiseTime: 1000, // The amount of time in milliseconds for the wave to rise from 0 to it's final height.
+              waveAnimateTime: 8000, // The amount of time in milliseconds for a full wave to enter the wave circle.
+              waveRise: true, // Control if the wave should rise from 0 to it's full height, or start at it's full height.
+              waveHeightScaling: true, // Controls wave size scaling at low and high fill percentages. When true, wave height reaches it's maximum at 50% fill, and minimum at 0% and 100% fill. This helps to prevent the wave from making the wave circle from appear totally full or empty when near it's minimum or maximum fill.
+              waveAnimate: true, // Controls if the wave scrolls or is static.
+              waveColor: "#178BCA", // The color of the fill wave.
+              waveOffset: 0, // The amount to initially offset the wave. 0 = no offset. 1 = offset of one full wave.
+              textVertPosition: .5, // The height at which to display the percentage text withing the wave circle. 0 = bottom, 1 = top.
+              textSize: 1, // The relative height of the text to display in the wave circle. 1 = 50%
+              valueCountUp: true, // If true, the displayed value counts up from 0 to it's final value upon loading. If false, the final value is displayed.
+              displayPercent: false, // If true, a % symbol is displayed after the value.
+              textColor: "#045681", // The color of the value text when the wave does not overlap it.
+              waveTextColor: "#A4DBf8" // The color of the value text when the wave overlaps it.
+          };
+      }
+
+      function loadLiquidFillGauge(elementId, value, width, height, config) {
+          if(config == null) config = liquidFillGaugeDefaultSettings();
+
+          d3.select("#container").select("svg").remove();
+
+          // Select gauge element
+          var gauge = d3.select("#" + elementId).append("svg")
+                  .attr("width", width)
+                  .attr("height", height);
+
+          //console.log("width: " + width);
+          //console.log("height: " + height);
+
+          // Set padding
+          var padding = 10;
+
+          // Set dimensions minus padding
+          var wid = width - padding;
+          var hei = height - padding;
+          //console.log("wid: " + wid);
+          //console.log("hei: " + hei);
+
+          // Calc radius size
+          var radius = Math.min(wid, hei)/2;
+          var circumference = radius * 2;
+          //console.log("radius: " + radius);
+
+          // Calc the offset  ?of what?
+          var locationX = (parseInt(width) - circumference) / 2;
+          var locationY = (parseInt(height) - circumference) / 2;
+          //console.log("locationX: " + locationX);
+          //console.log("locationY: " + locationY);
+
+          var fillPercent = Math.max(config.minValue, Math.min(config.maxValue, value))/config.maxValue;
+          //console.log("fillPercent: " + fillPercent);
+
+          var waveHeightScale;
+          if(config.waveHeightScaling){
+              waveHeightScale = d3.scale.linear()
+                  .range([0,config.waveHeight,0])
+                  .domain([0,50,100]);
+          } else {
+              waveHeightScale = d3.scale.linear()
+                  .range([config.waveHeight,config.waveHeight])
+                  .domain([0,100]);
+          }
+
+          var textPixels = (config.textSize*radius/2);
+          var textFinalValue = parseFloat(value).toFixed(decimals);
+          //console.log("textFinalValue: " + textFinalValue);
+          var textStartValue = config.valueCountUp?config.minValue:textFinalValue;
+          var percentText = config.displayPercent?"%":"";
+          var circleThickness = config.circleThickness * radius;
+          var circleFillGap = config.circleFillGap * radius;
+          var fillCircleMargin = circleThickness + circleFillGap;
+          var fillCircleRadius = radius - fillCircleMargin;
+          var waveHeight = fillCircleRadius*waveHeightScale(fillPercent*100);
+
+          var waveLength = fillCircleRadius*2/config.waveCount;
+          var waveClipCount = 1+config.waveCount;
+          var waveClipWidth = waveLength*waveClipCount;
+
+          // Rounding functions so that the correct number of decimal places is always displayed as the value counts up.
+          var textRounder = function(value){ return Math.round(value); };
+          if(parseFloat(textFinalValue) != parseFloat(textRounder(textFinalValue))){
+              textRounder = function(value){ return parseFloat(value).toFixed(1); };
+          }
+          if(parseFloat(textFinalValue) != parseFloat(textRounder(textFinalValue))){
+              textRounder = function(value){ return parseFloat(value).toFixed(2); };
+          }
+
+          // Data for building the clip wave area.
+          var data = [];
+          for(var i = 0; i <= 40*waveClipCount; i++){
+              data.push({x: i/(40*waveClipCount), y: (i/(40))});
+          }
+
+          // Scales for drawing the outer circle.
+          var gaugeCircleX = d3.scale.linear().range([0,2*Math.PI]).domain([0,1]);
+          var gaugeCircleY = d3.scale.linear().range([0,radius]).domain([0,radius]);
+
+          // Scales for controlling the size of the clipping path.
+          var waveScaleX = d3.scale.linear().range([0,waveClipWidth]).domain([0,1]);
+          var waveScaleY = d3.scale.linear().range([0,waveHeight]).domain([0,1]);
+
+          // Scales for controlling the position of the clipping path.
+          var waveRiseScale = d3.scale.linear()
+              // The clipping area size is the height of the fill circle + the wave height, so we position the clip wave
+              // such that the it will overlap the fill circle at all when at 0%, and will totally cover the fill
+              // circle at 100%.
+              .range([(fillCircleMargin+fillCircleRadius*2+waveHeight),(fillCircleMargin-waveHeight)])
+              .domain([0,1]);
+          var waveAnimateScale = d3.scale.linear()
+              .range([0, waveClipWidth-fillCircleRadius*2]) // Push the clip area one full wave then snap back.
+              .domain([0,1]);
+
+          // Scale for controlling the position of the text within the gauge.
+          var textRiseScaleY = d3.scale.linear()
+              .range([fillCircleMargin+fillCircleRadius*2,(fillCircleMargin+textPixels*0.7)])
+              .domain([0,1]);
+
+          // Center the gauge within the parent SVG.
+          var gaugeGroup = gauge.append("g")
+              .attr('transform','translate('+locationX+','+locationY+')');
+
+          // Draw the outer circle.
+          var gaugeCircleArc = d3.svg.arc()
+              .startAngle(gaugeCircleX(0))
+              .endAngle(gaugeCircleX(1))
+              .outerRadius(gaugeCircleY(radius))
+              .innerRadius(gaugeCircleY(radius-circleThickness));
+          gaugeGroup.append("path")
+              .attr("d", gaugeCircleArc)
+              .style("fill", config.circleColor)
+              .attr('transform','translate('+radius+','+radius+')');
+
+          // Text where the wave does not overlap.
+          var text1 = gaugeGroup.append("text")
+              .text(textRounder(textStartValue) + percentText)
+              .attr("class", "liquidFillGaugeText")
+              .attr("text-anchor", "middle")
+              .attr("font-size", textPixels + "px")
+              .style("fill", config.textColor)
+              .attr('transform','translate('+radius+','+textRiseScaleY(config.textVertPosition)+')');
+
+          // The clipping wave area.
+          var clipArea = d3.svg.area()
+              .x(function(d) { return waveScaleX(d.x); } )
+              .y0(function(d) { return waveScaleY(Math.sin(Math.PI*2*config.waveOffset*-1 + Math.PI*2*(1-config.waveCount) + d.y*2*Math.PI));} )
+              .y1(function(d) { return (fillCircleRadius*2 + waveHeight); } );
+          var waveGroup = gaugeGroup.append("defs")
+              .append("clipPath")
+              .attr("id", "clipWave" + elementId);
+          var wave = waveGroup.append("path")
+              .datum(data)
+              .attr("d", clipArea)
+              .attr("T", 0);
+
+          // The inner circle with the clipping wave attached.
+          var fillCircleGroup = gaugeGroup.append("g")
+              .attr("clip-path", "url(#clipWave" + elementId + ")");
+          fillCircleGroup.append("circle")
+              .attr("cx", radius)
+              .attr("cy", radius)
+              .attr("r", fillCircleRadius)
+              .style("fill", config.waveColor);
+
+          // Text where the wave does overlap.
+          var text2 = fillCircleGroup.append("text")
+              .text(textRounder(textStartValue) + percentText)
+              .attr("class", "liquidFillGaugeText")
+              .attr("text-anchor", "middle")
+              .attr("font-size", textPixels + "px")
+              .style("fill", config.waveTextColor)
+              .attr('transform','translate('+radius+','+textRiseScaleY(config.textVertPosition)+')');
+
+          // Make the value count up.
+          if(config.valueCountUp){
+              var textTween = function(){
+                  var i = d3.interpolate(this.textContent, textFinalValue);
+                  return function(t) { this.textContent = textRounder(i(t)) + percentText; }
+              };
+              text1.transition()
+                  .duration(config.waveRiseTime)
+                  .tween("text", textTween);
+              text2.transition()
+                  .duration(config.waveRiseTime)
+                  .tween("text", textTween);
+          }
+
+          // Make the wave rise. wave and waveGroup are separate so that horizontal and vertical movement can be controlled independently.
+          var waveGroupXPosition = fillCircleMargin+fillCircleRadius*2-waveClipWidth;
+          if(config.waveRise){
+              waveGroup.attr('transform','translate('+waveGroupXPosition+','+waveRiseScale(0)+')')
+                  .transition()
+                  .duration(config.waveRiseTime)
+                  .attr('transform','translate('+waveGroupXPosition+','+waveRiseScale(fillPercent)+')')
+                  .each("start", function(){ wave.attr('transform','translate(1,0)'); }); // This transform is necessary to get the clip wave positioned correctly when waveRise=true and waveAnimate=false. The wave will not position correctly without this, but it's not clear why this is actually necessary.
+          }else{
+              waveGroup.attr('transform','translate('+waveGroupXPosition+','+waveRiseScale(fillPercent)+')');
+          }
+
+          if(config.waveAnimate) animateWave();
+
+          function animateWave() {
+              wave.attr('transform','translate('+waveAnimateScale(wave.attr('T'))+',0)');
+              wave.transition()
+                  .duration(config.waveAnimateTime * (1-wave.attr('T')))
+                  .ease('linear')
+                  .attr('transform','translate('+waveAnimateScale(1)+',0)')
+                  .attr('T', 1)
+                  .each('end', function(){
+                      wave.attr('T', 0);
+                      animateWave(config.waveAnimateTime);
+                  });
+          }
+      }
+    </script>
+
+    <!-- BIRST FUNCTIONS -->
+    <script>
+      /* BIRST FUNCTIONS - NO MODIFICATION NEEDED */
+
+      /* FUNCTIONS */
+
+      // FUNCTION: escapeParam
+      // Replace single quotes in a string
+      function escapeParam(str) {
+          str = str.replace(/'/g, "\\'");
+          return str;
+      }
+
+      // FUNCTION: indexOf
+      // Lookup a particular object key in an array of objects
+      var indexOf = function(key, array) {
+          for (var i = 0; i < array.length; i++) {
+              if (key === array[i].key) {
+                  return i; // returns index of matching object
+              }
+          }
+          return -1; // no match found
+      };
+
+      // FUNCTION: prepareFilters
+      // Validates and prepares the filter state
+      var prepareFilters = function(state, apply) {
+
+          if (apply == null) {
+              console.debug("apply is null. All filters valid.");
+              return state;
+          }
+
+          // apply is empty
+          if (apply.length == 0) {
+              console.debug("apply is empty. All filters valid.");
+              return state;
+          }
+
+          var idx = indexOf("filters", apply)
+          if (idx >= 0) {
+              var value = apply[idx].value;
+              console.debug("value:" + value);
+          }
+
+          switch (value) {
+              case "ALL":
+                  console.log("apply is ALL. All filters valid.");
+                  return state;
+                  break;
+
+              case "NONE":
+                  console.debug("apply is NONE. No filters valid.");
+                  state.length = 0;
+                  return state;
+                  break;
+
+              case "VALID":
+                  for (var f = 0; f < state.length; f++) {
+
+                      console.debug("STATE[" + f + "]");
+                      console.debug(state[f]);
+                      console.debug(state[f].key);
+
+                      var test = indexOf(state[f].key, apply);
+                      console.debug("test: " + test);
+
+                      if (test < 0) {
+                          // remove filter from state
+                          state.splice(f, 1);
+                          console.debug("Filter not listed as VALID. Removed.");
+                      }
+                  }
+                  return state;
+                  break;
+
+              case "INVALID":
+                  for (var f = 0; f < state.length; f++) {
+
+                      console.debug(state[f]);
+                      console.debug(state[f].key);
+
+                      var test = indexOf(state[f].key, apply);
+
+                      if (test >= 0) {
+                          // remove filter from state
+                          state.splice(f, 1);
+                          console.debug("Filter listed as INVALID. Removed.");
+                      }
+                  }
+                  return state;
+                  break;
+
+              default:
+                  // apply is misconfigured, then ALL assumed
+                  console.debug("apply was misconfigured, leaving filter state as is");
+                  return state;
+          }
+
+      };
+
+      // FUNCTION: addDefaultFilters
+      // Adds default filters to the filter state
+      var addDefaultFilters = function(state, defaults) {
+
+          for (var d = 0; d < defaults.length; d++) {
+
+              var filt = defaults[d];
+
+              // If filter does NOT exist in the current filter state
+              if (indexOf(filt.key, state) < 0) {
+                  // Add filter to state
+                  console.debug("F" + d + ": Default filter not present. Add to filter state.")
+                  state.push(filt);
+              } else {
+                  console.debug("F" + d + ": Default filter already exists. Ignore default filter.")
+              }
+          }
+          return state;
+      };
+
+      // FUNCTION: createWhere
+      // Creates WHERE clause based on filter state
+      var createWhere = function(state) {
+
+          var clause = "";
+
+          // Check to see if there are current filters
+          if (state.length != 0) {
+              clause += " WHERE ("; // Start WHERE
+
+              // Get the filters from the filter state array and append them to the base query
+              for (var i = 0; i < state.length; i++) {
+
+                  var filter = state[i];
+
+                  // Split multiple filter values into an array of filter values
+                  var values = String(filter.value).split(",");
+
+                  // IF NOT the first or only param, add an AND
+                  if (i != 0) {
+                      clause += " AND ";
+                  }
+
+                  // Start Filter
+                  clause += "(";
+
+                  // Loop through filter value array and append filter params to the query
+                  for (var q = 0; q < values.length; q++) {
+
+                      // For each filter value, set the key and the value
+                      if (q === values.length - 1) {
+                          // Single or final filter value
+                          clause += "[" + filter.key + "]" + filter.operator + "'" + escapeParam(values[q]) + "'";
+                      } else {
+                          // OR for multiple filter values
+                          clause += "[" + filter.key + "]" + filter.operator + "'" + escapeParam(values[q]) + "' OR ";
+                      }
+
+                  }
+
+                  // Close Filter
+                  clause += ")";
+              }
+
+              // Close WHERE
+              clause += ")";
+
+              console.log("Clause: " + clause);
+
+          } else {
+              console.debug("Filter state empty. No clause created.")
+          }
+
+          // Return the finalized WHERE clause
+          return clause;
+      };
+
+      // FUNCTION: runQuery
+      // Sets filters, creates and runs the query
+      var runQuery = function() {
+          console.log("runQuery");
+
+          // Test for applyFilters definition, if missing, define
+          if (!("applyFilters" in window) || (typeof applyFilters == "undefined")) {
+              var applyFilters = [];
+          }
+
+          // Test for defaultFilters definition, if missing, define
+          if (!("defaultFilters" in window) || (typeof defaultFilters == "undefined")) {
+              var defaultFilters = [];
+          }
+
+          // Prepare filter state for WHERE clause construction
+          var state = prepareFilters(filterState, applyFilters);
+          state = addDefaultFilters(state, defaultFilters);
+
+          // Create WHERE clause
+          var clause = createWhere(state);
+
+          // Append final query params
+          var query = bql + clause + bqlSuffix;
+
+          // Verify the final query
+          console.log(query);
+
+          // Execute the query
+          BirstConfig.getData(query);
+
+      };
+
+    </script>
+
+    <!-- QUERY DEFINITION SCRIPT -->
+	  <script>
+  		/* QUERY DEFINITION - MODIFICATION NEEDED */
+
+  		// MODIFICATION NEEDED
+      // Set the value of the measure to the appropriate Birst measure name
+      var measure = "SavedExpression('Percent to Goal')";
+
+      // MODIFICATION NEEDED
+      // Set the sort dimension
+  		var sortDimension = "";
+      //var sortDimension = "["Manager.Channel ID"]";
+      var sortOrder = "";
+
+      // Default query, ranges in dataset
+      var bql = "SELECT USING OUTER JOIN " + measure + " 'COL0' " + ((sortDimension != "") ? ", " + sortDimension + " 'COL1' " : "") + "FROM [ALL]";
+
+      // MODIFICATION NEEDED
+  		// Query suffix
+  		// Set appropriate suffix
+      if (sortDimension != ""){
+        var bqlSuffix = " ORDER BY " + sortDimension + " " + sortOrder; // Don't forget the leading space
+      }else{
+  		  var bqlSuffix = ""; // For no suffix
+      }
+
+      /* FILTER DEFINITION */
+
+      var filterState = []; // Create a filter state array
+
+      // MODIFICATION NEEDED
+      // Set the valid filters that can be applied
+      //var applyFilters = []; // All filters are valid
+      //var applyFilters = [{"key":"filters","value":"ALL"}]; // All filters are valid
+      var applyFilters = [{"key":"filters","value":"VALID"},{"key":"Manager.Channel Name"}]; // Listed filters are valid
+      //var applyFilters = [{"key":"filters","value":"INVALID"},{"key":"Manager.Channel Name"}]; // Listed filters are NOT valid
+      //var applyFilters = [{"key":"filters","value":"NONE"}]; // No filters are valid
+
+      // MODIFICATION NEEDED
+      // Default filters (for initial WHERE clause)
+      var defaultFilters = [];
+      //var defaultFilters = [{"key":"Manager.Channel","operator":"=","value":["Direct"]}];
+      //var defaultFilters = [{"key":"Manager.Channel","operator":"<>","value":["Direct","Partner"]}];
+      //var defaultFilters = [{"key":"Manager.Channel","operator":"=","value":["Direct"]},{"key":"Manager.Territory","operator":"=","value":["East"]}];
+    </script>
+
+    <!-- CHART SCRIPT -->
+    <script>
+      /* CHART SPECIFIC SCRIPT - MODIFICATION NEEDED TO MATCH CHART TYPE */
+
+      // VARIABLE DEFINITIONS
+
+      // Set fill gauge config using the defaults, then set some of them custom
+      var config = liquidFillGaugeDefaultSettings();
+
+      // MODIFICATION NEEDED
+      // Set the configuration of the fill gauge
+      //
+      // You can add more custom config here by looking at the options in the
+      // liquidFillGaugeDefaultSettings() method at the beginning of the D3 code
+
+      // Colors
+      config.circleColor = "#178BCA";
+      config.textColor = "#045681";
+      config.waveTextColor = "#A4DBf8";
+      config.waveColor = "#178BCA";
+
+      // Circle
+      config.circleThickness = .1;
+
+      // Waves
+      config.waveCount = 3;
+      config.waveRiseTime = 1500;
+      config.waveAnimateTime = 5000;
+
+      // Is the KPI a percentage?
+      config.displayPercent = true;
+
+      // Set the gauge min/max
+      // TODO Set this dynamically?
+      config.minValue = 0;
+      config.maxValue = 100;
+
+      // Set decimal places for displayed value
+      var decimals = 1;
+
+      // FUNCTION DEFINITIONS
+      // IMPORTANT!! translateData AND drawD3 FUNCTIONS WILL BE DIFFERENT FOR EACH CHART
+
+      // FUNCTION: translateData
+      // Data conversion function, BQL to Google Donut chart format
+      var translateData = function(bqlResult) {
+
+        for (var i = 0, len = bqlResult.length; i < len; i++) {
+
+          console.info("length: " + bqlResult.length);
+
+          // Parse data from result set and multiply by 100 for %
+          var KPI = bqlResult[i];
+          if (config.displayPercent){ KPI *= 100;}
+          return KPI;
+
+        }
+
+      };
+
+      // FUNCTION: drawD3
+      // Draws the D3 chart
+      var drawD3 = function(height, width){
+
+        // Debugging
+        console.info("drawing");
+        console.info("height: " + height);
+        console.info("width: " + width);
+
+        // Clear all objects from div
+        d3.selectAll("#chartDiv > *").remove();
+
+        // Call D3 fill gauge code, pass in svg element name, query result, width, height, and the config
+        var gauge = loadLiquidFillGauge("chartDiv", chartData, width, height, config);
+
+      };
+
+      // FUNCTION: drawChart
+      // Call to draw the chart
+      var drawChart = function(){
+
+        // Get current dimensions of the window
+        winWidth = $("body").width();
+        winHeight = $("body").height();
+
+        // Debugging
+        console.info("winWidth: " + $("body").width());
+        console.info("winHeight: " + $("body").height());
+
+        clearTimeout(wait);
+
+        wait = setTimeout(drawD3(winHeight,winWidth), 500);
+
+      };
+
+    </script>
+
+    <!-- EXECUTE SCRIPT -->
+    <script>
+      /* MAIN EXECUTE SCRIPT - NO MODIFICATION NEEDED */
+
+      /* VARIABLES */
+
+      // Get default window dimensions
+      var winWidth = $("body").width();
+      var winHeight = $("body").height();
+
+      // Wait time for redraw
+      var wait;
+
+      // For passing data in expected chart format
+      var chartData;
+
+      // FUNCTION: eventHandler
+      // Birst Event Handler
+      var birstEventHandler = function(e) {
+
+          // Birst Filter operation
+          if (e.data.operation === "setFilters") {
+              console.log("setFilters");
+
+              filterState = e.data.filters;
+
+              runQuery();
+          }
+
+          // Birst Query operation
+          if (e.data.operation === "executeQueryResult") {
+
+              console.log("executeQuery");
+
+              // Get results of BQL query
+              var bqlData = e.data.result.rows;
+
+              // Call the result function to translate BQL query to chart format
+              chartData = translateData(bqlData);
+
+              // Draw chart
+              drawChart();
+
+          }
+      };
+
+      // FUNCTION: mainCallBack
+      // Main callback function
+      var mainCallBack = function() {
+          console.log("mainCallBack");
+
+          // Birst event handler declaration
+          BirstConfig.callBack(birstEventHandler);
+
+          // Run the Birst query
+          runQuery();
+      };
+
+      // DOCUMENT READY
+      $(document).ready(function() {
+        console.log("Document loaded.");
+
+        mainCallBack();
+
+      });
+
+      // FUNCTION ON RESIZE
+      // Checks for window resize and calls the draw code
+      $(window).resize(function(){
+
+        drawChart();
+
+      });
+
+    </script>
+
+  </body>
+</html>
